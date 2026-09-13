@@ -34,6 +34,15 @@
   .logo span{ color:var(--brand); }
   .hd-date{ color:var(--t3); font-size:13px; }
   .hd-right{ margin-left:auto; display:flex; gap:8px; align-items:center; }
+  .sync{ display:flex; align-items:center; gap:6px; font-size:12px; color:var(--t3);
+    cursor:pointer; user-select:none; padding:4px 6px; border-radius:6px; }
+  .sync:hover{ background:var(--line2); }
+  .sync i{ width:8px; height:8px; border-radius:50%; background:var(--t3); display:inline-block; }
+  .sync[data-s="on"] i{ background:var(--green); }
+  .sync[data-s="syncing"] i{ background:var(--orange); animation:pulse 1s infinite; }
+  .sync[data-s="pending"] i{ background:var(--yellow); }
+  .sync[data-s="off"] i{ background:var(--red); }
+  @keyframes pulse{ 50%{ opacity:.4; } }
 
   .btn{
     border:1px solid var(--line); background:var(--card); color:var(--t1);
@@ -248,6 +257,7 @@
     .hd-date{ display:none; }
   }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@tencent-ai/workbuddy-cloud-sdk@dev/lib/index.global.js"></script>
 </head>
 <body data-page-node-id="IDHXHTUYiLXvqa8uWGHRc0">
 
@@ -256,6 +266,7 @@
     <div class="logo" data-page-node-id="8yv6KMXbFen7h5yypFyWDD">进度<span data-page-node-id="DGRL5Y1m97vzUE9TfIiSlB">台</span></div>
     <div class="hd-date" id="hdDate" data-page-node-id="pJMGntZUEwXb7xmu8vBfml"></div>
     <div class="hd-right" data-page-node-id="bh83Nxz0bA5ULAO94wM0NI">
+      <span class="sync" id="syncDot" data-s="off" title="点击立即同步" onclick="cloudPull(true)"><i></i><span id="syncTxt">仅本机</span></span>
       <button class="btn btn-sm" onclick="exportData()" data-page-node-id="8F7AXBhC9KMEg6A26NqmQy">导出</button>
       <button class="btn btn-sm" onclick="document.getElementById('fileIn').click()" data-page-node-id="zTB3uuUQ5Fd5q7bbQccSYF">导入</button>
       <input type="file" id="fileIn" accept=".json" style="display:none" onchange="importData(this)" data-page-node-id="tEPm2ep7IiyfNllczh5TQD">
@@ -494,7 +505,58 @@ function load(){
   try{ const r=localStorage.getItem(KEY); if(r){ const d=JSON.parse(r); if(d&&d.projects) return d; } }catch(e){}
   return seed();
 }
-function save(){ localStorage.setItem(KEY, JSON.stringify(DB)); }
+function save(){ DB.savedAt=new Date().toISOString();
+  try{ localStorage.setItem(KEY, JSON.stringify(DB)); }catch(e){}
+  schedPush(); }
+
+/* ============ 云同步（多设备共享） ============ */
+/* 一次一行存 app_state(id='main')，整库 JSON 上传下载；本机 localStorage 作离线缓存。
+   冲突规则：last-writer-wins，按 savedAt 时间戳取较新的一方。 */
+const PUBLIC_CONFIG={ endpoint:'https://progress-workbench.app.workbuddy.host',
+  publishableKey:'wbpk_LTw6IJioYdp3SPcjRenu0H_hg0CLUW6LrvIEma0vKwwQa3haAZf2lup' };
+let cloud=null, cloudOK=false, syncTimer=null, pushing=false, pulling=false;
+try{ cloud=WorkBuddyCloud.createWorkBuddyCloud({ endpoint:PUBLIC_CONFIG.endpoint,
+  publishableKey:PUBLIC_CONFIG.publishableKey }); cloudOK=true; }catch(e){ cloudOK=false; }
+
+function setSync(st){
+  const dot=document.getElementById('syncDot'), txt=document.getElementById('syncTxt');
+  if(!dot) return; dot.dataset.s=st;
+  txt.textContent={on:'已同步',syncing:'同步中',pending:'待同步',off:'仅本机'}[st]||'';
+}
+function schedPush(){ if(!cloudOK) return; setSync('pending');
+  clearTimeout(syncTimer); syncTimer=setTimeout(cloudPush, 800); }
+async function cloudPush(){
+  if(!cloudOK||pushing) return; pushing=true; setSync('syncing');
+  try{
+    const { error } = await cloud.database.from('app_state')
+      .upsert({ id:'main', payload:{version:DB.version||1, projects:DB.projects, savedAt:DB.savedAt},
+        updated_at:new Date().toISOString() });
+    if(error){ console.warn('cloud push', error.message); setSync('off'); toast('云同步失败，数据已存本机'); }
+    else setSync('on');
+  }catch(e){ setSync('off'); }
+  pushing=false;
+}
+async function cloudPull(manual){
+  if(!cloudOK||pulling) return; pulling=true;
+  if(manual) setSync('syncing');
+  try{
+    const { data, error } = await cloud.database.from('app_state')
+      .select('*').eq('id','main').maybeSingle();
+    if(error){ setSync('off'); if(manual) toast('云端读取失败，暂用本机数据'); }
+    else if(data && data.payload && Array.isArray(data.payload.projects)){
+      const cAt=data.payload.savedAt||'', lAt=DB.savedAt||'';
+      if(cAt>=lAt) applyCloud(data.payload);   // 云端较新 → 用云端
+      else await cloudPush();                  // 本机较新 → 推上去
+    } else await cloudPush();                  // 云端为空 → 首次上传
+  }catch(e){ setSync('off'); }
+  pulling=false;
+}
+function applyCloud(d){
+  try{ localStorage.setItem(KEY+'_bak_'+Date.now(), JSON.stringify(DB)); }catch(e){}  // 覆盖前留底
+  DB={version:d.version||1, projects:d.projects, savedAt:d.savedAt};
+  try{ localStorage.setItem(KEY, JSON.stringify(DB)); }catch(e){}
+  curId=null; closeDrawer(); render();
+}
 
 /* ============ 计算 ============ */
 /* ---- 进度计算：以「叶子节点」为最小权重单位，避免大任务小任务同权重失真 ---- */
@@ -1205,7 +1267,15 @@ document.addEventListener('keydown',e=>{
 const wd=['日','一','二','三','四','五','六'][new Date().getDay()];
 document.getElementById('hdDate').textContent=`${TODAY} 星期${wd}`;
 
-DB=load(); save(); render();
+DB=load(); render();
+
+/* 启动云同步：拉取云端最新 → 本机较新则回推；窗口聚焦时自动对齐 */
+(async function cloudBoot(){
+  if(!cloudOK){ setSync('off'); return; }
+  setSync('syncing');
+  await cloudPull();
+})();
+window.addEventListener('focus', ()=>{ if(cloudOK) cloudPull(); });
 </script>
 </body>
 </html>
