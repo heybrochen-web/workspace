@@ -145,7 +145,7 @@
     transition:.15s; user-select:none; }
   .caret.collapsed{ transform:rotate(-90deg); }
   tr.trow td, tr.srow td{ background:#FCFCFD; }
-  td.tname{ padding-left:32px; font-size:13px; }  td.sname{ padding-left:54px; font-size:13px; color:var(--t2); }
+  td.tname{ padding-left:32px; font-size:13px; }  td.sname{ padding-left:70px; font-size:13px; color:var(--t2); }
   tr.trow:hover td, tr.srow:hover td{ background:#F7F9FF; }
   tr.trow, tr.srow{ cursor:default; }
   td input[type=checkbox]{ width:15px; height:15px; accent-color:var(--brand); cursor:pointer;
@@ -736,13 +736,16 @@ function renderCards(){
   }).join('');
 }
 
-/* ---- 树的展开状态：默认全展开 ---- */
-let exp={};
+/* ---- 树的展开状态：默认全展开（exp=项目层，expT=关键任务层） ---- */
+let exp={}, expT={};
 function isExp(p){ return exp[p.id]!==false; }
+function isExpT(t){ return expT[t.id]!==false; }
 function toggleRow(id){ exp[id]=!isExp(DB.projects.find(x=>x.id===id)); renderTable(); }
+function toggleTRow(id){ expT[id]=(expT[id]===false); renderTable(); }
 function toggleAllRows(){
-  const allOpen=DB.projects.every(p=>isExp(p));
-  DB.projects.forEach(p=>{ exp[p.id]=!allOpen; });
+  const allOpen=DB.projects.every(p=>isExp(p)&&(p.tasks||[]).every(t=>!(t.children||[]).length||isExpT(t)));
+  DB.projects.forEach(p=>{ exp[p.id]=!allOpen;
+    (p.tasks||[]).forEach(t=>{ if((t.children||[]).length) expT[t.id]=!allOpen; }); });
   document.getElementById('btnExp').textContent=allOpen?'全部展开':'全部折叠';
   renderTable();
 }
@@ -808,8 +811,11 @@ function rowsOf(p,ql){
   (p.tasks||[]).forEach(t=>{
     const tp=taskProg(t), kids=t.children||[], ns=nodes(t);
     const leaf=!kids.length;
+    const topen=leaf?false:(isExpT(t)||!!ql);   // 搜索时强制全展开
     h+=`<tr class="trow">
       <td class="tname">
+        ${leaf?'<span class="caret"></span>'
+          :`<span class="caret ${topen?'':'collapsed'}" onclick="toggleTRow('${t.id}')">▾</span>`}
         <input type="checkbox" id="tb_${t.id}" ${tp===100?'checked':''}
           onchange="toggleTask('${p.id}','${t.id}')">
         <span class="nm-cell" onclick="openTaskModal('${p.id}','${t.id}','')">${hl(t.title,ql)}</span>
@@ -833,9 +839,11 @@ function rowsOf(p,ql){
         <button class="del" onclick="removeNode('${p.id}','${t.id}','')">删除</button>
       </td>
     </tr>`;
+    if(!topen) return;
     kids.forEach(c=>{
       h+=`<tr class="srow">
         <td class="sname">
+          <span class="caret"></span>
           <input type="checkbox" id="sb_${c.id}" ${c.done?'checked':''}
             onchange="toggleSub('${p.id}','${t.id}','${c.id}')">
           <span class="nm-cell" onclick="openTaskModal('${p.id}','${t.id}','${c.id}')">${hl(c.title,ql)}</span>
@@ -851,7 +859,7 @@ function rowsOf(p,ql){
       </tr>`;
     });
   });
-  h+=`<tr class="addrow"><td colspan="9" style="padding-left:32px">
+  h+=`<tr class="addrow"><td colspan="9" style="padding-left:48px">
     <button onclick="openEdit('${p.id}')">＋ 添加任务</button></td></tr>`;
   return h;
 }
