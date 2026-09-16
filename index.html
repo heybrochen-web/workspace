@@ -641,6 +641,7 @@ function stInfo(p){
 function nodeDue(n){
   if(!n.due) return '';
   const d=dDiff(TODAY,n.due);
+  if(isRepeat(n) && d<0) return '<span class="due-today">下次 '+nextDue(n)+'</span>';  // 循环任务无逾期概念
   if(d<0) return '<span class="due-late">'+n.due+' · 逾期'+(-d)+'天</span>';
   if(d===0) return '<span class="due-today">'+n.due+' · 今天</span>';
   return n.due;
@@ -675,12 +676,24 @@ function alertList(){
     (p.tasks||[]).forEach(t=>{
       nodes(t).forEach(n=>{
         if(n.done||!n.due) return;
-        const d=dDiff(TODAY,n.due), cid=(n===t?'':n.id);
-        if(d<0) out.push({p,cls:'overdue',tag:'任务逾期 '+(-d)+' 天',tg:'overdue',
-          name:p.name+' · '+n.title,tid:t.id,cid,act:'task',rp:isRepeat(n)});
-        else if(d===0) out.push({p,cls:'today',
-          tag:isRepeat(n)?('今天该做 · '+repeatTxt(n)):'任务今天到期',tg:'today',
-          name:p.name+' · '+n.title,tid:t.id,cid,act:'task',rp:isRepeat(n)});
+        const cid=(n===t?'':n.id);
+        if(isRepeat(n)){
+          // 循环任务不存在「逾期」：错过的周期直接看下一次到期，近 5 天内才提醒
+          const rd = n.due<TODAY ? nextDue(n) : n.due;
+          const d = dDiff(TODAY, rd);
+          if(d>5) return;
+          out.push({p, cls:d===0?'today':'soon', tg:d===0?'today':'soon',
+            tag: d===0 ? ('今天该做 · '+repeatTxt(n))
+               : d===1 ? ('明天到期 · '+repeatTxt(n))
+               : (d+' 天后到期 · '+repeatTxt(n)),
+            name:p.name+' · '+n.title, tid:t.id, cid, act:'task', rp:true});
+        } else {
+          const d=dDiff(TODAY,n.due);
+          if(d<0) out.push({p,cls:'overdue',tag:'任务逾期 '+(-d)+' 天',tg:'overdue',
+            name:p.name+' · '+n.title,tid:t.id,cid,act:'task'});
+          else if(d===0) out.push({p,cls:'today',tag:'任务今天到期',tg:'today',
+            name:p.name+' · '+n.title,tid:t.id,cid,act:'task'});
+        }
       });
     });
   });
@@ -1120,7 +1133,8 @@ function paintTm(){
   if(tmRpV==='none') hint='设一个日期后，任务会进入提醒区（逾期 / 今天到期）。';
   else {
     hint='循环任务完成后，到期日自动推进到下一周期并重置为未完成。<br>'
-      +'它属于「永续维护型」，<b>不计入项目进度</b>，避免进度条来回震荡。';
+      +'它属于「永续维护型」，<b>不计入项目进度</b>，避免进度条来回震荡。<br>'
+      +'循环任务没有「逾期」：错过周期只看下一次到期，到期前 <b>5 天内</b>才进入首页提醒。';
     if(n&&n.lastDone) hint+='<br>上次完成：'+n.lastDone;
     if(n&&n.due) hint+=' · 本次到期：'+n.due;
   }
