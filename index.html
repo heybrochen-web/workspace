@@ -126,6 +126,12 @@
   .rp{ font-size:11px; color:var(--brand); background:var(--brand-weak);
     padding:1px 6px; border-radius:4px; white-space:nowrap; }
   .due-late{ color:var(--red); } .due-today{ color:var(--orange); }
+  .rp-row{ display:flex; align-items:center; gap:8px; padding:9px 0;
+    border-bottom:1px solid var(--line); }
+  .rp-row:last-child{ border-bottom:none; }
+  .rp-nm{ flex:1; font-size:13px; min-width:0; overflow:hidden;
+    text-overflow:ellipsis; white-space:nowrap; }
+  .rp-when{ font-size:12px; color:var(--orange); white-space:nowrap; }
   .ops-cell{ white-space:nowrap; text-align:right; }
   .ops-cell button{ border:none; background:none; color:var(--t3); cursor:pointer;
     font-size:12px; padding:2px 4px; }
@@ -448,6 +454,23 @@
   </div>
 </div>
 
+<!-- 循环任务每日弹窗（每天最多一次，点完成即推进下个周期） -->
+<div class="modal" id="rpModal">
+  <div class="bg" onclick="closeRpModal()"></div>
+  <div class="panel" style="width:440px">
+    <div class="m-hd">循环任务 · 该做了</div>
+    <div class="m-bd">
+      <div style="font-size:12px;color:var(--t3);margin-bottom:6px">
+        以下是 5 天内到期的循环任务，点「完成」自动排到下一周期：</div>
+      <div id="rpList"></div>
+    </div>
+    <div class="m-ft">
+      <div style="flex:1"></div>
+      <button class="btn" onclick="closeRpModal()">知道了</button>
+    </div>
+  </div>
+</div>
+
 <script>
 /* ============ 工具 ============ */
 const KEY='wb_progress_v1';
@@ -569,7 +592,7 @@ function nextDue(n){
   const step=()=>{ const x=new Date(d+'T00:00:00');
     if(n.repeat==='daily') x.setDate(x.getDate()+1);
     else if(n.repeat==='weekly') x.setDate(x.getDate()+7);
-    else if(n.repeat==='monthly') x.setDate(x.getMonth()+1);
+    else if(n.repeat==='monthly') x.setMonth(x.getMonth()+1);
     else x.setDate(x.getDate()+(n.everyN||2));
     d=fmt(x); };
   step();
@@ -672,26 +695,14 @@ function alertList(){
     const tAlerts=[];
     (p.tasks||[]).forEach(t=>{
       nodes(t).forEach(n=>{
-        if(n.done||!n.due) return;
+        if(n.done||!n.due||isRepeat(n)) return;   // 循环任务走每日弹窗，不进提醒区
         const cid=(n===t?'':n.id);
         const nm = cid ? (p.name+' · '+t.title+' · '+n.title) : (p.name+' · '+n.title);
-        if(isRepeat(n)){
-          // 循环任务不存在「逾期」：错过的周期直接看下一次到期，近 5 天内才提醒
-          const rd = n.due<TODAY ? nextDue(n) : n.due;
-          const d = dDiff(TODAY, rd);
-          if(d>5) return;
-          tAlerts.push({p, cls:d===0?'today':'soon', tg:d===0?'today':'soon',
-            tag: d===0 ? ('今天该做 · '+repeatTxt(n))
-               : d===1 ? ('明天到期 · '+repeatTxt(n))
-               : (d+' 天后到期 · '+repeatTxt(n)),
-            name:nm, tid:t.id, cid, act:'task', rp:true});
-        } else {
-          const d=dDiff(TODAY,n.due);
-          if(d<0) tAlerts.push({p,cls:'overdue',tag:'任务逾期 '+(-d)+' 天',tg:'overdue',
-            name:nm,tid:t.id,cid,act:'task'});
-          else if(d===0) tAlerts.push({p,cls:'today',tag:'任务今天到期',tg:'today',
-            name:nm,tid:t.id,cid,act:'task'});
-        }
+        const d=dDiff(TODAY,n.due);
+        if(d<0) tAlerts.push({p,cls:'overdue',tag:'任务逾期 '+(-d)+' 天',tg:'overdue',
+          name:nm,tid:t.id,cid,act:'task'});
+        else if(d===0) tAlerts.push({p,cls:'today',tag:'任务今天到期',tg:'today',
+          name:nm,tid:t.id,cid,act:'task'});
       });
     });
     tAlerts.forEach(a=>out.push(a));
@@ -1147,7 +1158,7 @@ function paintTm(){
   else {
     hint='循环任务完成后，到期日自动推进到下一周期并重置为未完成。<br>'
       +'它属于「永续维护型」，<b>不计入项目进度</b>，避免进度条来回震荡。<br>'
-      +'循环任务没有「逾期」：错过周期只看下一次到期，到期前 <b>5 天内</b>才进入首页提醒。';
+      +'循环任务没有「逾期」：错过周期只看下一次到期，到期前 <b>5 天内</b>会在打开页面时弹窗提醒（每天最多一次），点完成即排到下一周期。';
     if(n&&n.lastDone) hint+='<br>上次完成：'+n.lastDone;
     if(n&&n.due) hint+=' · 本次到期：'+n.due;
   }
@@ -1296,7 +1307,7 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   document.getElementById('view-'+t.dataset.view).classList.add('on');
 });
 document.addEventListener('keydown',e=>{
-  if(e.key==='Escape'){ closeModal(); closeTaskModal(); closeDrawer(); }
+  if(e.key==='Escape'){ closeModal(); closeTaskModal(); closeDrawer(); closeRpModal(); }
   if((e.metaKey||e.ctrlKey)&&e.key==='Enter'&&document.getElementById('modal').classList.contains('on')) saveProject();
 });
 const wd=['日','一','二','三','四','五','六'][new Date().getDay()];
@@ -1306,11 +1317,54 @@ DB=load(); render();
 
 /* 启动云同步：拉取云端最新 → 本机较新则回推；窗口聚焦时自动对齐 */
 (async function cloudBoot(){
-  if(!cloudOK){ setSync('off'); return; }
+  if(!cloudOK){ setSync('off'); maybeShowRpModal(); return; }
   setSync('syncing');
   await cloudPull();
+  maybeShowRpModal();
 })();
 window.addEventListener('focus', ()=>{ if(cloudOK) cloudPull(); });
+
+/* ============ 循环任务每日弹窗（每天最多一次） ============ */
+const RP_DAY_KEY='wb_rp_popup_day';
+function rpDueList(){
+  const out=[];
+  DB.projects.filter(p=>p.status==='active').forEach(p=>{
+    (p.tasks||[]).forEach(t=>nodes(t).forEach(n=>{
+      if(n.done||!isRepeat(n)||!n.due) return;
+      // 循环任务无逾期概念：错过的周期直接看下一次到期，5 天内才进弹窗
+      const rd=n.due<TODAY?nextDue(n):n.due;
+      const d=dDiff(TODAY,rd);
+      if(d>5) return;
+      out.push({p,t,n,cid:(n===t?'':n.id),d});
+    }));
+  });
+  return out.sort((a,b)=>a.d-b.d);
+}
+function renderRpModal(){
+  const list=rpDueList(), box=document.getElementById('rpList');
+  if(!list.length){ box.innerHTML='<div style="color:var(--t3);padding:12px 0">5 天内没有到期的循环任务 ✓</div>'; return; }
+  box.innerHTML=list.map(x=>`
+    <div class="rp-row">
+      <span class="pri ${x.p.pri}">${x.p.pri}</span>
+      <span class="rp-nm" title="${esc(x.p.name+' · '+x.n.title)}">${esc(x.p.name)} · ${esc(x.n.title)}</span>
+      <span class="rp-when">${x.d===0?'今天该做':(x.d===1?'明天到期':x.d+' 天后到期')}</span>
+      <button class="btn btn-sm btn-primary" onclick="rpDone('${x.p.id}','${x.t.id}','${x.cid}')">完成</button>
+    </div>`).join('');
+}
+function rpDone(pid,tid,cid){
+  checkNode(pid,tid,cid);
+  renderRpModal();
+  toast('已完成，已排到下一周期');
+  if(!rpDueList().length) closeRpModal();
+}
+function maybeShowRpModal(){
+  try{ if(localStorage.getItem(RP_DAY_KEY)===TODAY) return; }catch(e){}
+  if(!rpDueList().length) return;
+  try{ localStorage.setItem(RP_DAY_KEY,TODAY); }catch(e){}
+  renderRpModal();
+  document.getElementById('rpModal').classList.add('on');
+}
+function closeRpModal(){ document.getElementById('rpModal').classList.remove('on'); }
 </script>
 </body>
 </html>
