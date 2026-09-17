@@ -666,36 +666,49 @@ function alertList(){
   const out=[];
   DB.projects.filter(p=>p.status==='active').forEach(p=>{
     const s=stInfo(p), sd=stale(p);
-    if(s.lv==='overdue') out.push({p,cls:'overdue',tag:s.label,tg:'overdue',name:p.name,act:'proj'});
-    else if(s.lv==='today') out.push({p,cls:'today',tag:s.label,tg:'today',name:p.name,act:'proj'});
-    else if(s.lv==='soon') out.push({p,cls:'soon',tag:s.label,tg:'soon',name:p.name,act:'proj'});
-    else if(sd>=3) out.push({p,cls:'stale',tag:'已 '+sd+' 天未更新',tg:'stale',name:p.name,act:'proj'});
-    // 任务级：只提醒「逾期」和「今天到期」，3 天内不提醒，避免噪音淹没项目
-    // 项目本身已逾期/今日到期时不再重复提醒它的任务，防止同一个项目刷两条
-    if(s.lv==='overdue'||s.lv==='today') return;
+    const derived=effDueInfo(p).derived;   // 项目截止日是否派生自任务
+    // ---- 任务级（含子任务）：「逾期 / 今天到期」永远提醒，点名到具体任务 ----
+    // （旧逻辑：项目逾期时跳过任务级 → 派生场景下子任务逾期被项目行吞掉，首页看不到具体是哪个子任务）
+    const tAlerts=[];
     (p.tasks||[]).forEach(t=>{
       nodes(t).forEach(n=>{
         if(n.done||!n.due) return;
         const cid=(n===t?'':n.id);
+        const nm = cid ? (p.name+' · '+t.title+' · '+n.title) : (p.name+' · '+n.title);
         if(isRepeat(n)){
           // 循环任务不存在「逾期」：错过的周期直接看下一次到期，近 5 天内才提醒
           const rd = n.due<TODAY ? nextDue(n) : n.due;
           const d = dDiff(TODAY, rd);
           if(d>5) return;
-          out.push({p, cls:d===0?'today':'soon', tg:d===0?'today':'soon',
+          tAlerts.push({p, cls:d===0?'today':'soon', tg:d===0?'today':'soon',
             tag: d===0 ? ('今天该做 · '+repeatTxt(n))
                : d===1 ? ('明天到期 · '+repeatTxt(n))
                : (d+' 天后到期 · '+repeatTxt(n)),
-            name:p.name+' · '+n.title, tid:t.id, cid, act:'task', rp:true});
+            name:nm, tid:t.id, cid, act:'task', rp:true});
         } else {
           const d=dDiff(TODAY,n.due);
-          if(d<0) out.push({p,cls:'overdue',tag:'任务逾期 '+(-d)+' 天',tg:'overdue',
-            name:p.name+' · '+n.title,tid:t.id,cid,act:'task'});
-          else if(d===0) out.push({p,cls:'today',tag:'任务今天到期',tg:'today',
-            name:p.name+' · '+n.title,tid:t.id,cid,act:'task'});
+          if(d<0) tAlerts.push({p,cls:'overdue',tag:'任务逾期 '+(-d)+' 天',tg:'overdue',
+            name:nm,tid:t.id,cid,act:'task'});
+          else if(d===0) tAlerts.push({p,cls:'today',tag:'任务今天到期',tg:'today',
+            name:nm,tid:t.id,cid,act:'task'});
         }
       });
     });
+    tAlerts.forEach(a=>out.push(a));
+    // ---- 项目级：自设截止日才以项目名义提醒逾期/今天/临期 ----
+    if(!derived){
+      if(s.lv==='overdue') out.push({p,cls:'overdue',tag:s.label,tg:'overdue',name:p.name,act:'proj'});
+      else if(s.lv==='today') out.push({p,cls:'today',tag:s.label,tg:'today',name:p.name,act:'proj'});
+      else if(s.lv==='soon') out.push({p,cls:'soon',tag:s.label,tg:'soon',name:p.name,act:'proj'});
+      else if(sd>=3) out.push({p,cls:'stale',tag:'已 '+sd+' 天未更新',tg:'stale',name:p.name,act:'proj'});
+    } else {
+      // 派生截止日：逾期/今天已由具体任务行呈现，只在没有任务告警时补「还剩N天 / 停滞」，避免同项目刷两条
+      const urgent=tAlerts.some(a=>a.cls==='overdue'||a.cls==='today');
+      if(!urgent){
+        if(s.lv==='soon') out.push({p,cls:'soon',tag:s.label,tg:'soon',name:p.name,act:'proj'});
+        else if(sd>=3) out.push({p,cls:'stale',tag:'已 '+sd+' 天未更新',tg:'stale',name:p.name,act:'proj'});
+      }
+    }
   });
   const ORD={overdue:0,today:1,soon:2,stale:3};
   return out.sort((a,b)=>(ORD[a.cls]-ORD[b.cls])||byUrgency(a.p,b.p));
